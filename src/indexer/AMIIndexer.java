@@ -29,15 +29,6 @@ import org.apache.lucene.store.FSDirectory;
  * @author Debasis
  */
 
-interface AMI_FIELDS {
-    String FIELD_SENTENCE_ID = "id"; // globally unique id (doc_name.segmentid.sentenceid) 
-    String FIELD_DOC_NAME = "docname";
-    String FIELD_CONTENT = "content";  // analyzed content
-    String FIELD_DECISION_SCORE = "decision_score";
-    String FIELD_PREF_SCORE = "pref_score";
-    String FIELD_SPEAKER_ID = "speakerid";
-}
-
 public class AMIIndexer {
     
     Properties prop;

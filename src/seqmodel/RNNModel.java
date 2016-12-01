@@ -5,17 +5,13 @@
  */
 package seqmodel;
 
-import java.io.FileNotFoundException;
+import java.io.File;
 import java.io.FileReader;
+import java.util.Arrays;
 import java.util.Properties;
-import org.canova.api.records.reader.RecordReader;
 import org.canova.api.records.reader.SequenceRecordReader;
-import org.canova.api.records.reader.impl.CSVRecordReader;
 import org.canova.api.records.reader.impl.CSVSequenceRecordReader;
-import org.canova.api.split.FileSplit;
 import org.canova.api.split.NumberedFileInputSplit;
-import org.canova.api.util.ClassPathResource;
-import org.deeplearning4j.datasets.canova.RecordReaderDataSetIterator;
 import org.deeplearning4j.datasets.canova.SequenceRecordReaderDataSetIterator;
 import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
@@ -25,7 +21,6 @@ import org.deeplearning4j.nn.conf.GradientNormalization;
 import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
 import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
 import org.deeplearning4j.nn.conf.Updater;
-import org.deeplearning4j.nn.conf.layers.BaseRecurrentLayer;
 import org.deeplearning4j.nn.conf.layers.GravesLSTM;
 import org.deeplearning4j.nn.conf.layers.RnnOutputLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
@@ -66,12 +61,15 @@ public class RNNModel {
     }
     */
     
-    DataSetIterator getAMISentenceIterator(String fileName) throws Exception {
+    DataSetIterator getAMISentenceIterator(String dirName) throws Exception {
         final int miniBatchSize = 10;
         final int numPossibleLabels = 2;
-        String trainDvecFile = prop.getProperty(fileName);
-        SequenceRecordReader reader = new CSVSequenceRecordReader(0, "\\s+");
-        reader.initialize(new NumberedFileInputSplit(trainDvecFile + ".%d", 0, 9));
+        
+        SequenceRecordReader reader = new CSVSequenceRecordReader(0, "\t");
+        File dataSetDir = new File(dirName);
+        File[] seqFiles = dataSetDir.listFiles();
+        
+        reader.initialize(new NumberedFileInputSplit(dirName + "%d.txt", 0, seqFiles.length));
         DataSetIterator iterator = new
             SequenceRecordReaderDataSetIterator(reader, miniBatchSize, numPossibleLabels, labelIndex, false);
         return iterator;
@@ -108,8 +106,25 @@ public class RNNModel {
     }
     
     public void evaluate() throws Exception {
-        train = getAMISentenceIterator("train.dvec.file");
-        test = getAMISentenceIterator("test.dvec.file");
+        String dataSetBaseDir = prop.getProperty("docvec.dir");
+        train = getAMISentenceIterator(dataSetBaseDir + "/train/");
+        test = getAMISentenceIterator(dataSetBaseDir + "/test/");
+        
+        //+++ DEBUG:
+        System.out.println("train:");
+        train.reset();
+        while (train.hasNext()) {
+            System.out.println(train.next());
+        }
+        
+        System.out.println("test:");
+        test.reset();
+        while (test.hasNext()) {
+            System.out.println(test.next());
+        }
+        //--- DEBUG
+        
+        /*
         MultiLayerNetwork rnn = buildRNN(train);
         
         final int nEpochs = 5; //Number of epochs (full passes of training data) to train on
@@ -134,6 +149,7 @@ public class RNNModel {
             
             System.out.println(evaluation.stats());
         }
+        */
     }
     
     public static void main(String[] args) throws Exception {
