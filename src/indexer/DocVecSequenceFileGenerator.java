@@ -27,12 +27,12 @@ import org.deeplearning4j.models.embeddings.wordvectors.WordVectors;
  * 
  * @author dganguly
  */
-public class SequenceFileGenerator {
+public class DocVecSequenceFileGenerator {
     Properties prop;
     IndexReader reader;
     WordVectors wvecs;
     
-    public SequenceFileGenerator(String propFile) throws Exception {
+    public DocVecSequenceFileGenerator(String propFile) throws Exception {
         prop = new Properties();
         prop.load(new FileReader(propFile));
         File indexDir = new File(prop.getProperty("index"));
@@ -40,28 +40,71 @@ public class SequenceFileGenerator {
         
         String docVecFile = prop.getProperty("dvec.out.file");
         wvecs = WordVectorSerializer.loadTxtVectors(new File(docVecFile));
+        
+        prepareOutputFolders();
+    }
+    
+    final void prepareOutputFolders() throws Exception {
+        String[] rcdTypes = { "train", "test" }; 
+        
+        for (String rcdType : rcdTypes) {
+            File outRcdTypeDir = new File(prop.getProperty("docvec.dir") + "/" + rcdType);
+            if (!outRcdTypeDir.exists())
+                outRcdTypeDir.mkdir();
+            else {
+                outRcdTypeDir.delete();
+                outRcdTypeDir.mkdir();                
+            }
+        }
     }
 
-    void saveSegment(List<String> sentences, int sequenceId, boolean train) throws Exception {        
+    void saveSegment(List<String> sentences, int sequenceId, boolean train) throws Exception {
+        
+        boolean subsampling = Boolean.parseBoolean(prop.getProperty("subsampling", "false"));
+        if (subsampling)
+            sentences = subsampleSegments(sentences);
+        
         String rcdType = train? "train" : "test";
-        File outRcdTypeDir = new File(prop.getProperty("docvec.dir") + "/" + rcdType);
-        if (!outRcdTypeDir.exists())
-            outRcdTypeDir.mkdir();
+        File outDir = new File(prop.getProperty("docvec.dir") + "/" + rcdType);
             
-        File outDir = new File(outRcdTypeDir.getPath());
-        if (!outDir.exists())
-            outDir.mkdir();
-
         System.out.println("Writing sequence " + sequenceId + " in: " + outDir);
         
-        FileWriter writer = new FileWriter(outDir.getPath() + "/" + sequenceId + ".txt");
+        FileWriter writer = new FileWriter(outDir.getPath() + "/vecs." + sequenceId + ".txt");        
         BufferedWriter bw = new BufferedWriter(writer);
-        for (String sentence : sentences) {
-            bw.write(sentence);
-        }
         
+        for (String sentence : sentences) {
+            bw.write(sentence + "\n");
+        }
+
         bw.close();
+        
         writer.close();
+    }
+    
+    void clearFiles() {
+        for (String rcdType : "train test".split("\\s+")) {
+            File outDir = new File(prop.getProperty("docvec.dir") + "/" + rcdType);
+            if (!outDir.exists()) {
+                outDir.mkdir();
+            }
+            else {
+                File[] files = outDir.listFiles();
+                for (File f : files) {
+                    f.delete();
+                }     
+            }
+        }        
+    }
+    
+    void removeEmptyFiles() {
+        for (String rcdType : "train test".split("\\s+")) {
+            File outDir = new File(prop.getProperty("docvec.dir") + "/" + rcdType);
+            File[] files = outDir.listFiles();
+            for (File f : files) {
+                if (f.length() == 0)
+                    f.delete();
+            }            
+        }
     }
     
     // Get the number of records for train/test split
@@ -75,10 +118,44 @@ public class SequenceFileGenerator {
         for (double c : vec) {
             buff.append(c).append("\t");
         }
+        buff.deleteCharAt(buff.length()-1);
         return buff.toString();
     }
     
+    ArrayList<String> subsampleSegments(List<String> segments) {
+        ArrayList<String> subsampled = new ArrayList<>();
+        String classifyType = prop.getProperty("classify.type", "decs");
+        int offset = classifyType.equals("decs")? -2 : -1;
+        int numSegments = segments.size();
+        int subSampleSize = Integer.parseInt(prop.getProperty("subsample.size", "2"));
+        for (int i=0; i < numSegments; i++) {
+            String segment = segments.get(i);
+            String[] tokens = segment.split("\\s+");
+
+            int label = Integer.parseInt(tokens[tokens.length + offset]);
+            
+            if (label == 1) {
+                if (i>=subSampleSize) {
+                    for (int k=1; k <= subSampleSize; k++) {
+                        subsampled.add(segments.get(i-k));                        
+                    }
+                }
+                subsampled.add(segment);
+                if (i < numSegments-subSampleSize) {
+                    for (int k=1; k <= subSampleSize; k++) {
+                        subsampled.add(segments.get(i+k));   
+                    }
+                }
+                i = i + subSampleSize;
+            }
+        }
+        return subsampled;
+    }
+    
     public void writeDocs() throws Exception {        
+        
+        clearFiles();
+        
         int numDocs = reader.numDocs();
         int prevSegment = -1, segment = 0;
         List<String> sentencesInSegment = new ArrayList<>();
@@ -95,28 +172,29 @@ public class SequenceFileGenerator {
             Document d = reader.document(i);
             double[] dvec = wvecs.getWordVector("DOCNO_" + i);
             
-            if (dvec == null)
+            if (dvec == null) {
+                System.err.println("No vec found for doc# " + i);
                 continue;
+            }
             
             docName = d.get(AMI_FIELDS.FIELD_DOC_NAME);
             segment = Integer.parseInt(d.get(AMI_FIELDS.FIELD_SENTENCE_ID));
             
-            String decScore = d.get(AMI_FIELDS.FIELD_DECISION_SCORE);
-            String prefScore = d.get(AMI_FIELDS.FIELD_PREF_SCORE);
+            int decScore = Integer.parseInt(d.get(AMI_FIELDS.FIELD_DECISION_SCORE)) > 0? 1 : 0;
+            int prefScore = Integer.parseInt(d.get(AMI_FIELDS.FIELD_PREF_SCORE)) > 0? 1 : 0;
             
             StringBuilder builder = new StringBuilder();
             builder
-                    .append(i)
-                    .append("\t")
                     .append(vecToStr(dvec))
+                    .append("\t")
                     .append(decScore)
                     .append("\t")
-                    .append(prefScore)
-                    .append("\n");
+                    .append(prefScore);
+            
             
             // Detect changes in segments            
             if (prevSegment >-1 && segment!=prevSegment) {
-                saveSegment(sentencesInSegment, sequenceId++, train);
+                saveSegment(sentencesInSegment, /*decBuffer, prefBuffer,*/ sequenceId++, train);
                 sentencesInSegment = new ArrayList<>();
             }
             
@@ -135,20 +213,20 @@ public class SequenceFileGenerator {
         }
         
         saveSegment(sentencesInSegment, sequenceId++, train); // last batch saved
-        reader.close();
-        
+        reader.close();        
     }
     
     public static void main(String[] args) {
         if (args.length == 0) {
             args = new String[1];
-            System.out.println("Usage: java Doc2VecTrainFileGenerator <prop-file>");
+            System.out.println("Usage: java DocVecSequenceFileGenerator <prop-file>");
             args[0] = "init.properties";
         }
         
         try {
-            SequenceFileGenerator gen = new SequenceFileGenerator(args[0]);
+            DocVecSequenceFileGenerator gen = new DocVecSequenceFileGenerator(args[0]);
             gen.writeDocs();
+            gen.removeEmptyFiles();
         }
         catch (Exception ex) {
             ex.printStackTrace();

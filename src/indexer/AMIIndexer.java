@@ -37,8 +37,9 @@ public class AMIIndexer {
     IndexWriter writer;
     List<String> stopwords;
     
-    static final String SENTENCE_DELIMS = ".?!";
-    static final String DELIMS = ",;.!'\".?$&*(){}[]<>/\\|";
+    public static final String SENTENCE_DELIMS = ".?!";
+    public static final String DELIMS = ",;.!'\".?$&*(){}[]<>/\\|";
+    public static final String WORD_LABEL_DELIM = "_";
 
     public AMIIndexer(String propFile) throws Exception {
         prop = new Properties();
@@ -98,6 +99,10 @@ public class AMIIndexer {
     int getLabel(String label) {
         if (label.equals("nan"))
             return 0;
+        else if (label.equalsIgnoreCase("yes") || label.equalsIgnoreCase("maybe"))
+            return 1;
+        else if (label.equalsIgnoreCase("no"))
+            return 0;
         return (int)(Float.parseFloat(label));        
     }
     
@@ -116,9 +121,10 @@ public class AMIIndexer {
         BufferedReader br = new BufferedReader(fr);
         
         String line, prevFileName = null, prevSegmentId = null;
-        int sentenceIdInDoc = 0;
         StringBuffer buff = new StringBuffer();
         int dec = 0, pref = 0;
+        int labelCol = Integer.parseInt(prop.getProperty("decs.column"));
+        boolean writeLabelsForEachWord = Boolean.parseBoolean(prop.getProperty("word.labels", "false"));
         
         while ((line = br.readLine()) != null) {
             String[] tokens = line.split("\t");
@@ -127,16 +133,23 @@ public class AMIIndexer {
             String segmentId = tokens[3];
                         
             // Propagate the maximum for this sentence/segment
-            int label = getLabel(tokens[16]);
-            if (label > dec)
-                dec = label;
-            label = getLabel(tokens[20]);
-            if (label > pref)
-                pref = label;
+            int decLabel = getLabel(tokens[labelCol]);
+            if (decLabel > dec)
+                dec = decLabel;
+            int prefLabel = getLabel(tokens[20]);
+            if (prefLabel > pref)
+                pref = prefLabel;
+
+            String wordWithPayload = new String(word);
+            word = word.replace(WORD_LABEL_DELIM, "");
+            
+            if (writeLabelsForEachWord) {                
+                wordWithPayload = word + WORD_LABEL_DELIM + decLabel + WORD_LABEL_DELIM + prefLabel + " ";
+            }
             
             if (indexSentence) {
-                if (isEOS(word)) {
-                    buff.append(word);
+                if (isEOS(word)) {                        
+                    buff.append(wordWithPayload);
                     Document d = constructDoc(buff.toString(), fileName, segmentId, tokens[9], dec, pref);
                     writer.addDocument(d);
                     buff = new StringBuffer();
@@ -154,7 +167,7 @@ public class AMIIndexer {
                     pref = 0;
                     prevSegmentId = segmentId;
                     prevFileName = fileName;
-                    buff.append(word);
+                    buff.append(wordWithPayload);
                     continue;
                 }
             }
@@ -168,7 +181,7 @@ public class AMIIndexer {
             else if (indexSentence && buff.length() > 0 && isEOS(word)) {
                 buff.deleteCharAt(buff.length()-1);
             }
-            buff.append(word);
+            buff.append(wordWithPayload);
         }
     }
     

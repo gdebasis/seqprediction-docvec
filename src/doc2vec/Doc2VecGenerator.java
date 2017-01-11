@@ -42,12 +42,14 @@ class LuceneDocIterator implements SentenceIterator {
     int docId;
     Analyzer analyzer;
     int numDocs;
+    boolean labelsStoredWithWords;
     
-    public LuceneDocIterator(File indexDir, String stopFile) throws Exception {
+    public LuceneDocIterator(File indexDir, String stopFile, boolean labelsStoredWithWords) throws Exception {
         reader = DirectoryReader.open(FSDirectory.open(indexDir.toPath()));        
         docId = 0;
         analyzer = AMIIndexer.constructAnalyzer(stopFile);
         numDocs = reader.numDocs();
+        this.labelsStoredWithWords = labelsStoredWithWords;
     }
 
     @Override
@@ -99,7 +101,13 @@ class LuceneDocIterator implements SentenceIterator {
         while (stream.incrementToken()) {
             String term = termAtt.toString();
             term = term.toLowerCase();
-            tokenizedContentBuff.append(term).append(" ");
+            
+            if (labelsStoredWithWords) {
+                term = term.split("\\" + AMIIndexer.WORD_LABEL_DELIM)[0]; // the first part is the word
+            }
+            
+            if (!term.trim().equals(""))
+                tokenizedContentBuff.append(term).append(" ");
         }
         
         stream.end();
@@ -130,7 +138,9 @@ public class Doc2VecGenerator {
 
     // Read sentences from Lucene index
     void learnDocEmbeddings(File indexDir) throws Exception {
-        SentenceIterator iter = new LuceneDocIterator(indexDir, stopFile);
+        
+        boolean storedLabels = Boolean.parseBoolean(prop.getProperty("word.labels", "false"));        
+        SentenceIterator iter = new LuceneDocIterator(indexDir, stopFile, storedLabels);
         InMemoryLookupCache cache = new InMemoryLookupCache();
 
         TokenizerFactory t = new DefaultTokenizerFactory();

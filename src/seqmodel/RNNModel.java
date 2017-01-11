@@ -5,15 +5,8 @@
  */
 package seqmodel;
 
-import java.io.File;
 import java.io.FileReader;
-import java.util.Arrays;
 import java.util.Properties;
-import org.canova.api.records.reader.SequenceRecordReader;
-import org.canova.api.records.reader.impl.CSVSequenceRecordReader;
-import org.canova.api.split.NumberedFileInputSplit;
-import org.deeplearning4j.datasets.canova.SequenceRecordReaderDataSetIterator;
-import org.deeplearning4j.datasets.iterator.DataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.BackpropType;
@@ -36,16 +29,23 @@ import org.nd4j.linalg.lossfunctions.LossFunctions;
  */
 public class RNNModel {
     Properties prop;
-    DataSetIterator train;
-    DataSetIterator test;
+    AMISentenceIterator train;
+    AMISentenceIterator test;
     int numInputDimensions;
-    int labelIndex;
+    String classificationType;
     
+    static final int TRUNCATED_BPP_LEN = 1;
+    static final int SEED = 1000;
+    static final int NUM_EPOCHS = 1; //Number of epochs (full passes of training data) to train on
+    static final int BATCH_SIZE = 10;
+    static final int TRUNCATE_LEN = 25; // max 25 sentences in a segment...
+    static final int NUM_DIMENSIONS_LSTM = 5; // max 25 sentences in a segment...
+            
     public RNNModel(String propFile) throws Exception {
         prop = new Properties();
         prop.load(new FileReader(propFile));        
         numInputDimensions = Integer.parseInt(prop.getProperty("vec.numdimensions", "200"));
-        labelIndex = prop.getProperty("classify.type", "dec").equals("dec")? numInputDimensions + 1 : numInputDimensions + 2;
+        classificationType = prop.getProperty("classify.type", "decs");
     }
     
     /*
@@ -61,42 +61,80 @@ public class RNNModel {
     }
     */
     
+    /*
     DataSetIterator getAMISentenceIterator(String dirName) throws Exception {
         final int miniBatchSize = 10;
         final int numPossibleLabels = 2;
         
-        SequenceRecordReader reader = new CSVSequenceRecordReader(0, "\t");
+        SequenceRecordReader featureReader = new CSVSequenceRecordReader(0, "\t");
+        SequenceRecordReader labelReader = new CSVSequenceRecordReader(0, "\t");
+
         File dataSetDir = new File(dirName);
-        File[] seqFiles = dataSetDir.listFiles();
+        File[] seqFiles = dataSetDir.listFiles(new FilenameFilter() {
+            @Override
+            public boolean accept(File dir, String name) {
+                return name.startsWith("vecs");
+            }
+        });
         
-        reader.initialize(new NumberedFileInputSplit(dirName + "%d.txt", 0, seqFiles.length));
+        featureReader.initialize(new NumberedFileInputSplit(dirName + "vecs.%d.txt", 0, seqFiles.length));
+        labelReader.initialize(new NumberedFileInputSplit(dirName + "/" + classificationType + ".%d.txt", 0, seqFiles.length));
+        
         DataSetIterator iterator = new
-            SequenceRecordReaderDataSetIterator(reader, miniBatchSize, numPossibleLabels, labelIndex, false);
+            SequenceRecordReaderDataSetIterator(featureReader, labelReader, miniBatchSize, numPossibleLabels, false);
         return iterator;
     }
+    */
     
-    MultiLayerNetwork buildRNN(DataSetIterator iter) {
-        final int tbpttLength = 10;
+    MultiLayerNetwork buildRNN(AMISentenceIterator iter) {
         
         MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
-                        .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT).iterations(1)
+                        .seed(SEED)
+                        .iterations(10)
+                        .optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT)
+                        //.optimizationAlgo(OptimizationAlgorithm.LBFGS)
+                        //.optimizationAlgo(OptimizationAlgorithm.CONJUGATE_GRADIENT)
                         .updater(Updater.RMSPROP)
-                        .regularization(true).l2(1e-5)
-                        .weightInit(WeightInit.XAVIER)
-                        .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue).gradientNormalizationThreshold(1.0)
-                        .learningRate(0.0018)
+                        //.updater(Updater.ADAGRAD)
+                        //.updater(Updater.SGD)
+                        //.regularization(true).l2(0.0001)
+                        //.regularization(true).l1(0.001)
+                        .weightInit(WeightInit.RELU)
+                        //.weightInit(WeightInit.UNIFORM)
+                        //.weightInit(WeightInit.XAVIER)
+                        //.gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue).gradientNormalizationThreshold(1.0)
+                        .gradientNormalization(GradientNormalization.RenormalizeL2PerLayer).gradientNormalizationThreshold(1.0)
+                        .learningRate(0.001)
                         .list(2)
                         .layer(0,
                                 new GravesLSTM.Builder()
                                 .nIn(numInputDimensions)
-                                .nOut(200)
-                                .activation("softsign").build())
-                        .layer(1, new RnnOutputLayer.Builder().activation("softmax")
-                                .lossFunction(LossFunctions.LossFunction.MCXENT)
-                                .nIn(numInputDimensions)
+                                .nOut(NUM_DIMENSIONS_LSTM)
+                                //.activation("softsign").build())
+                                .activation("softmax")
+                                //.activation("tanh")
+                                .build())
+                        /*        
+                        .layer(1,
+                                new GravesLSTM.Builder()
+                                .nIn(25)
+                                .nOut(NUM_DIMENSIONS_LSTM)
+                                //.activation("softsign").build())
+                                .activation("softmax")
+                                //.activation("tanh")
+                                .build())
+                        */        
+                        .layer(1, new RnnOutputLayer.Builder()
+                                .activation("softmax")
+                                //.activation("tanh")
+                                //.activation("sigmoid")
+                                //.lossFunction(LossFunctions.LossFunction.MCXENT)
+                                .lossFunction(LossFunctions.LossFunction.RMSE_XENT)
+                                .nIn(NUM_DIMENSIONS_LSTM)
                                 .nOut(2) // 2 for binary classification
                                 .build())
-                        .backpropType(BackpropType.TruncatedBPTT).tBPTTForwardLength(tbpttLength).tBPTTBackwardLength(tbpttLength)
+                        .backpropType(BackpropType.TruncatedBPTT).tBPTTForwardLength(TRUNCATED_BPP_LEN).tBPTTBackwardLength(TRUNCATED_BPP_LEN)
+                        //.backpropType(BackpropType.Standard)
                         .pretrain(false).backprop(true).build();
 
         MultiLayerNetwork net = new MultiLayerNetwork(conf);
@@ -105,43 +143,51 @@ public class RNNModel {
         return net;
     }
     
+    AMISentenceIterator getAMISentenceIterator(String dataDir) {
+        AMISentenceIterator iter = new AMISentenceIterator(dataDir, BATCH_SIZE, TRUNCATE_LEN, numInputDimensions, classificationType);
+        return iter;
+    }
+    
     public void evaluate() throws Exception {
         String dataSetBaseDir = prop.getProperty("docvec.dir");
         train = getAMISentenceIterator(dataSetBaseDir + "/train/");
         test = getAMISentenceIterator(dataSetBaseDir + "/test/");
         
-        //+++ DEBUG:
-        System.out.println("train:");
-        train.reset();
-        while (train.hasNext()) {
-            System.out.println(train.next());
-        }
+        System.out.println("Traning num_instances: " + train.numExamples());
+        System.out.println("Test num_instances: " + test.numExamples());
         
-        System.out.println("test:");
-        test.reset();
-        while (test.hasNext()) {
-            System.out.println(test.next());
-        }
+        //+++ DEBUG:
+        //System.out.println("train:");
+        //train.reset();
+        //while (train.hasNext()) {
+        //    System.out.println(train.next());
+        //}
+        
+        //System.out.println("test:");
+        //test.reset();
+        //while (test.hasNext()) {
+        //    System.out.println(test.next());
+        //}
         //--- DEBUG
         
-        /*
+        
         MultiLayerNetwork rnn = buildRNN(train);
         
-        final int nEpochs = 5; //Number of epochs (full passes of training data) to train on
-        
-        for (int i=0; i<nEpochs; i++) {
+        for (int i=0; i<NUM_EPOCHS; i++) {
+            System.out.println("Epoch: " + i);
             rnn.fit(train);        
-        
+            
             Evaluation evaluation = new Evaluation();
             while(test.hasNext()){
                 DataSet t = test.next();
                 INDArray features = t.getFeatureMatrix();
                 INDArray lables = t.getLabels();
-                INDArray inMask = t.getFeaturesMaskArray();
-                INDArray outMask = t.getLabelsMaskArray();
-                INDArray predicted = rnn.output(features, false, inMask, outMask);
+                //INDArray inMask = t.getFeaturesMaskArray();
+                //INDArray outMask = t.getLabelsMaskArray();
+                INDArray predicted = null;
+                predicted = rnn.output(features, false/*, inMask, outMask*/);
 
-                evaluation.evalTimeSeries(lables, predicted, outMask);
+                evaluation.evalTimeSeries(lables, predicted/*, outMask*/);
             }
             
             train.reset();
@@ -149,7 +195,7 @@ public class RNNModel {
             
             System.out.println(evaluation.stats());
         }
-        */
+        
     }
     
     public static void main(String[] args) throws Exception {
